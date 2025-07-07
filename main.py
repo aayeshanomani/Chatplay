@@ -63,18 +63,27 @@ class Phi2Model:
 class ChatRequest(BaseModel):
     prompt: str
 
-def is_safe_input(prompt: str) -> bool:
-    unsafe_keywords = ["violence", "death", "kill", "drugs", "sex", "blood", "die", "weapon"]
-    return all(word not in prompt.lower() for word in unsafe_keywords)
+UNSAFE_KEYWORDS = [
+    "violence", "death", "kill", "drugs", "sex", "blood", "die", "weapon",
+    "gun", "hate", "stupid", "bomb", "explode", "murder", "attack", "fight",
+    "war", "terrorist", "dead", "hurt"
+]
+
+def contains_inappropriate_content(text: str) -> bool:
+    return any(word in text.lower() for word in UNSAFE_KEYWORDS)
 
 phi_model = Phi2Model()
 
 @app.function()
 @fastapi_endpoint(method="POST", label='chat')
 def chat(req: ChatRequest):
-    if not is_safe_input(req.prompt):
-        raise HTTPException(status_code=400, detail="Inappropriate content detected in prompt.")
+    if contains_inappropriate_content(req.prompt):
+        return {"response": "Oops! Let's talk about something fun instead! 🌟"}
     
     phi_model.load.remote()
     result = phi_model.generate.remote(req.prompt)
+
+    if contains_inappropriate_content(result):
+        return {"response": "Let's talk about something fun instead! 🌈"}
+    
     return {"response": result}
