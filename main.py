@@ -1,9 +1,15 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from pydantic import BaseModel
 from modal import App, Image, fastapi_endpoint, method
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 MODEL_NAME = "microsoft/phi-2"
+
+UNSAFE_KEYWORDS = [
+    "violence", "death", "kill", "drugs", "sex", "blood", "die", "weapon",
+    "gun", "hate", "stupid", "bomb", "explode", "murder", "attack", "fight",
+    "war", "terrorist", "dead", "hurt"
+]
 
 image = (
     Image.debian_slim()
@@ -36,15 +42,13 @@ class Phi2Model:
             print(f"Warm-up failed: {e}")
 
     @method()
-    def generate(self, prompt: str) -> str:
-        print(f"Received prompt: {prompt}")
-
-        age = 5
+    def generate(self, user_input: str, age: int) -> str:
+        print(f"Received prompt: {user_input}")
 
         formatted_prompt = (
             "You are a cheerful and safe assistant for children aged 3 to 10. "
             "You always use friendly, simple words, emojis, and never mention anything scary, violent, or adult. "
-            f"Child (age {age}): {prompt}\n"
+            f"Child (age {age}): {user_input}\n"
             "Assistant:"
         )
 
@@ -57,33 +61,34 @@ class Phi2Model:
 
         print(f"Generated response: {response}")
         return response
-
-# web_app = FastAPI()
-
-class ChatRequest(BaseModel):
-    prompt: str
-
-UNSAFE_KEYWORDS = [
-    "violence", "death", "kill", "drugs", "sex", "blood", "die", "weapon",
-    "gun", "hate", "stupid", "bomb", "explode", "murder", "attack", "fight",
-    "war", "terrorist", "dead", "hurt"
-]
-
-def contains_inappropriate_content(text: str) -> bool:
-    return any(word in text.lower() for word in UNSAFE_KEYWORDS)
-
+    
 phi_model = Phi2Model()
 
-@app.function()
-@fastapi_endpoint(method="POST", label='chat')
-def chat(req: ChatRequest):
-    if contains_inappropriate_content(req.prompt):
+def is_unsafe(text: str) -> bool:
+    return any(word in text.lower() for word in UNSAFE_KEYWORDS)
+
+def safe_generate_response(message: str, age: int) -> str:
+    if is_unsafe(message):
         return {"response": "Oops! Let's talk about something fun instead! 🌟"}
     
     phi_model.load.remote()
-    result = phi_model.generate.remote(req.prompt)
-
-    if contains_inappropriate_content(result):
-        return {"response": "Let's talk about something fun instead! 🌈"}
+    result = phi_model.generate.remote(message, age)
+    if is_unsafe(result):
+        return "Let's talk about something fun instead! 🌈"
+    return result
     
-    return {"response": result}
+fastapi_app = FastAPI()
+
+class ChatRequest(BaseModel):
+    message: str
+    age: int
+
+@fastapi_app.post("/chat")
+def chat_endpoint(req: ChatRequest):
+    reply = safe_generate_response(req.message, req.age)
+    return {"reply": reply}
+
+@app.function()
+@fastapi_endpoint(method="POST")
+def chat(req: ChatRequest):
+    return chat_endpoint(req)
