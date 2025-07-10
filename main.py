@@ -2,6 +2,7 @@ import re
 from fastapi import FastAPI
 from pydantic import BaseModel
 from modal import App, Image, fastapi_endpoint, method
+from better_profanity import profanity
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 MODEL_NAME = "microsoft/phi-2"
@@ -9,11 +10,12 @@ MODEL_NAME = "microsoft/phi-2"
 UNSAFE_KEYWORDS = [
     "violence", "death", "kill", "drugs", "sex", "blood", "die", "weapon",
     "gun", "hate", "stupid", "bomb", "explode", "murder", "attack", "fight",
-    "war", "terrorist", "dead", "hurt"
+    "war", "terrorist", "dead", "hurt", "naked", "porn", "abuse", "touch",
+    "molest", "private part", "rape"
 ]
 
 SUSPICIOUS_KEYWORDS = [
-    "hide", "secret", "don’t tell", "don't tell", "lie", "run away",
+    "hide", "secret", "don’t tell", "lie", "run away",
     "hate parents", "sneak", "trick", "keep from parents", "don’t show",
     "don't show", "escape", "cheat"
 ]
@@ -29,13 +31,13 @@ SUSPICIOUS_PATTERNS = [
 
 image = (
     Image.debian_slim()
-    .pip_install("torch", "transformers", "fastapi", "uvicorn", "numpy<2")
+    .pip_install("torch", "transformers", "fastapi", "uvicorn", "numpy<2", "better_profanity")
 )
 
 # Define Modal App
 app = App("chatplay-web", image=image)
 
-@app.cls(gpu="A10G", image=image)
+@app.cls(gpu="A10G", image=image, min_containers=1)
 class Phi2Model:
     @method()
     def load(self):
@@ -89,8 +91,11 @@ class Phi2Model:
         return response
     
 phi_model = Phi2Model()
+profanity.load_censor_words()
 
 def is_unsafe(text: str) -> bool:
+    if profanity.contains_profanity(text):
+        return True
     return any(word in text.lower() for word in UNSAFE_KEYWORDS)
 
 def is_suspicious(text: str) -> bool:
@@ -109,7 +114,18 @@ def is_suspicious(text: str) -> bool:
 
 def safe_generate_response(message: str, age: int) -> str:
     if is_unsafe(message):
-        return "Oops! Let's talk about something fun instead! 🌟"
+        return "That sounds like something important. I think it's best to talk to your parents or a grown-up you trust about it. I'm here for fun stories, games, and learning! 😊"
+    
+    '''
+    TODO: Improve the message
+
+    Example case:
+    curl -X POST https://aayeshanomani--chatplay-web-chat.modal.run \
+    -H "Content-Type: application/json" \
+    -d '{"message": "today i got bullied in class", "age": 7}'
+
+    {"reply":"I'm here to help with fun stories and games, not secrets! 😊 Let's play something else?"}
+    '''
     
     if is_suspicious(message):
         return "I'm here to help with fun stories and games, not secrets! 😊 Let's play something else?"
@@ -130,7 +146,7 @@ def chat_endpoint(req: ChatRequest):
     reply = safe_generate_response(req.message, req.age)
     return {"reply": reply}
 
-@app.function()
+@app.function(min_containers=1)
 @fastapi_endpoint(method="POST")
 def chat(req: ChatRequest):
     return chat_endpoint(req)
