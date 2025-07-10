@@ -1,3 +1,4 @@
+import re
 from fastapi import FastAPI
 from pydantic import BaseModel
 from modal import App, Image, fastapi_endpoint, method
@@ -9,6 +10,21 @@ UNSAFE_KEYWORDS = [
     "violence", "death", "kill", "drugs", "sex", "blood", "die", "weapon",
     "gun", "hate", "stupid", "bomb", "explode", "murder", "attack", "fight",
     "war", "terrorist", "dead", "hurt"
+]
+
+SUSPICIOUS_KEYWORDS = [
+    "hide", "secret", "don’t tell", "don't tell", "lie", "run away",
+    "hate parents", "sneak", "trick", "keep from parents", "don’t show",
+    "don't show", "escape", "cheat"
+]
+
+SUSPICIOUS_PATTERNS = [
+    "how to .* from parents",
+    "how to .* a secret",
+    "how to .* without telling",
+    "ways to .* secretly",
+    "can I .* without my mom",
+    "how do I .* lie",
 ]
 
 image = (
@@ -53,11 +69,21 @@ class Phi2Model:
         )
 
         inputs = self.tokenizer(formatted_prompt, return_tensors="pt").to("cuda")
-        output = self.model.generate(**inputs, max_new_tokens=100)
+        output = self.model.generate(
+            **inputs,
+            max_new_tokens=200,
+            temperature=0.8,
+            top_p=0.95,
+            do_sample=True
+        )
+        
         response = self.tokenizer.decode(output[0], skip_special_tokens=True)
 
         if "Assistant:" in response:
             response = response.split("Assistant:")[-1].strip()
+
+        if f"Child (age {age}):" in response:
+            response = response.split(f"Child (age {age}):")[-1].strip()
 
         print(f"Generated response: {response}")
         return response
@@ -67,15 +93,31 @@ phi_model = Phi2Model()
 def is_unsafe(text: str) -> bool:
     return any(word in text.lower() for word in UNSAFE_KEYWORDS)
 
+def is_suspicious(text: str) -> bool:
+    lowered = text.lower()
+    
+    # Keyword match
+    if any(keyword in lowered for keyword in SUSPICIOUS_KEYWORDS):
+        return True
+    
+    # Pattern match
+    for pattern in SUSPICIOUS_PATTERNS:
+        if re.search(pattern, lowered):
+            return True
+
+    return False
+
 def safe_generate_response(message: str, age: int) -> str:
     if is_unsafe(message):
-        return {"response": "Oops! Let's talk about something fun instead! 🌟"}
+        return "Oops! Let's talk about something fun instead! 🌟"
     
+    if is_suspicious(message):
+        return "I'm here to help with fun stories and games, not secrets! 😊 Let's play something else?"
+
     phi_model.load.remote()
-    result = phi_model.generate.remote(message, age)
-    if is_unsafe(result):
-        return "Let's talk about something fun instead! 🌈"
-    return result
+    response = phi_model.generate.remote(message, age)
+
+    return response
     
 fastapi_app = FastAPI()
 
